@@ -9,15 +9,14 @@ warnings.simplefilter(action='ignore', category=DeprecationWarning)
 import pandas as pd
 import numpy as np
 
-# ........................ PandaPower and Pymoo ........................
-
+# ========================= Importing PandaPower and Pymoo =========================
 import pandapower.networks as pn
 # from pymoo.core.mixed import MixedVariableGA
 # from pymoo.algorithms.soo.nonconvex.ga import GA
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.core.variable import Real, Integer, Binary
 
-# ........................ Functions ........................
+# ========================= Importing Functions of other models and price calculation =========================
 from e_net_mv_20240725 import power_system
 # from investment_cost_function_20240711 import PRICE
 from cost_fuct_20240814_CAPEX import PRICE
@@ -31,14 +30,13 @@ from p2g_model import P2G
 from h2_storage_20240724 import HyES
 from emission_func_20240909 import emission_calc
 # from repair_capacity import repair_function
-
 # from bess_20240725 import BESS
 # import matplotlib.pyplot as plt
 
 # pd.set_option('display.max_columns', None)
 # pd.set_option('display.max_rows', None)
 
-# ........................ Power grid ........................
+# ========================= Setting up Power grid using PandaPower =========================
 net = pn.create_cigre_network_mv(with_der=False)
 net.load.drop(index=net.load.index, inplace=True)
 net.sgen.drop(index=net.sgen.index, inplace=True)
@@ -75,11 +73,10 @@ min_v_drop = 0.5
 max_v_drop = 1.5
 
 
-# ........................ Optimization Function ........................
-
-
+# ========================= Optimization Function =========================
 class MyProblem(ElementwiseProblem):
 
+    # Initializing and defining the variables
     def __init__(self, year, stage, carried_capacity, carried_capacity_pv, carried_cap_pv_array_mw, **kwargs):
         variables = dict()
 
@@ -89,7 +86,8 @@ class MyProblem(ElementwiseProblem):
         self.carried_capacity_pv = carried_capacity_pv
         self.carried_cap_pv_array_mw = carried_cap_pv_array_mw
 
-        # *********************************** PV stage 1 ******************************************
+        # -------------------------------- Variables (x) --------------------------------
+        # *********************************** PV ******************************************
         # bus-bars for the PV generators in industrial area
         for k in range(0, 2):
             variables[f"x{k:01}"] = Integer(bounds=(1, 2))
@@ -194,13 +192,17 @@ class MyProblem(ElementwiseProblem):
 
         super().__init__(vars=variables, n_obj=2, n_ieq_constr=60, **kwargs)
 
+    # Evaluation function for calculating the objective functions and constraints
     def _evaluate(self, x, out, *args, **kwargs):
 
+        # ----------------------------- Convert x to array -----------------------------
         x = np.array([x[f"x{k:01}"] for k in range(0, 43)])
 
+        # ----------------------------- Initialize objective function values -----------------------------
         obj_value = 0  # for the final F1 at the end
         obj_value_emission_tCO2 = 0  # for F2
 
+        # ----------------------------- Initialize constraint values -----------------------------
         g1_jan, g1_jul, g2025_heat_balance_jan, g2025_heat_balance_jul, g2025_pv_bound, g2025_re_share, \
             g2_jan, g2_jul, g2026_heat_balance_jan, g2026_heat_balance_jul, g2026_pv_bound, g2026_re_share, \
             g3_jan, g3_jul, g2027_heat_balance_jan, g2027_heat_balance_jul, g2027_pv_bound, g2027_re_share, \
@@ -238,7 +240,7 @@ class MyProblem(ElementwiseProblem):
         x_gen_bus_1_mw = x[42]
         # print('x_chp_mw =', x_chp_mw)
 
-        # ------------------------------ Capacities for CAPEX calculation ------------------------------
+        # ------------------------------ Defining capacities for CAPEX calculation ------------------------------
         capex_x_pv_mw = x_pv_size
         capex_x_wt_mw = x_wt_mw  # Keeping the present year x values to calculate CAPEX
         capex_x_chp_mw = x_chp_mw
@@ -373,12 +375,15 @@ class MyProblem(ElementwiseProblem):
         else:
             x_p2g_size_mw = x_p2g_size_mw
 
+        # -------------------------- Implementation of Yearly investment and operation cost calc. -------------------
+        # -------------------------- Stage 1: Year 2025 --------------------------
         if self.year == 2025:
             year = 1
             obj_value_2025_eur_npv = 0
 
             # ======================================= 2025 - January =======================================
-            # ******************** CHP ********************
+            # ******************** Function: CHP ********************
+            # here I run the CHP model
             chp = CHP(chp_mw=x_chp_mw)
             chp_res = chp.chp_calc()  # [MW/h & m3/hr]
             res_chp_p_mwh = chp_res[0]
@@ -389,13 +394,15 @@ class MyProblem(ElementwiseProblem):
             # print("res_chp_th_mwh =", res_chp_th_mwh)  # mw/h
             # print("res_chp_gas_import_m3 =", res_chp_gas_import_m3)
 
-            # ******************** HP ********************
+            # ******************** Function: HP ********************
+            # here I run the HP model
             hp_res = hp_model(hp_bus=x_hp_bus, hp_mw=x_hp_size)
             res_hp_th_mwh = hp_res.hp()
             # print("x_hp_input_mw=", x_hp_size)
             # print("res_hp_th_mwh =", res_hp_th_mwh)
 
-            # ******************** Thermal Energy System, Storage Management & Heat Flow ********************
+            # ******************** Function: Thermal Energy System, Storage Management & Heat Flow ********************
+            # Here I run the TES model
             # -------------------------- 2025 Jan ----------------------------------
             # either produce th_energy from CHP or HP - 2025 only CHP - rest years CHP or HP.
             # how to integrate in the TES function?
@@ -435,6 +442,7 @@ class MyProblem(ElementwiseProblem):
             # print(res_tes_th_deficit_2025_jul_mwh)
 
             # ************************* P2G *********************************
+            # here I run the P2G model
             # print("P2G:")
             p2g_model = P2G(p2g_input_mw=x_p2g_size_mw)
             # h2_production_m3_s = p2g_model.p2g_model()[0]
@@ -443,6 +451,7 @@ class MyProblem(ElementwiseProblem):
 
             # ************************* H2 Energy System, Storage Management & Hy Flow *****************************
             # print("GES:")
+            # here I run the H2 storage model for Jan and July separately
             ges_res = HyES(p2g_input_mw=x_p2g_size_mw, h2_production_mwh=h2_production_mwh,
                            storage_h2_max_mwh=x_storage_h2_mwh)
 
@@ -460,7 +469,8 @@ class MyProblem(ElementwiseProblem):
             # print(res_ges_2025_jul)
             # print(h2_blue_import_2025_jul_mwh)
 
-            # ***************************************** POWER SYSTEM & BESS ****************************************
+            # ***************************************** Function: POWER SYSTEM & BESS ****************************************
+            # Here I run the power flow for Jan and Jul separately.
             # print("Power System 2025 Jan:")
             p_sys = power_system(net=net, x=x, x_pv_bus=x_pv_bus, x_pv_mw=x_pv_size,
                                  x_wt_bus=x_wt_bus, x_wt_mw=x_wt_mw,
@@ -477,6 +487,7 @@ class MyProblem(ElementwiseProblem):
             # print(power_balance_2023_jan)
             # print(res_line_loss_mw_2025_jan_mwh)
 
+            # Removing all the elements from the power system to prepare for next run
             p_sys.remove_sgen()
             p_sys.remove_gen()
             p_sys.remove_load()
@@ -490,6 +501,7 @@ class MyProblem(ElementwiseProblem):
 
             # print(power_balance_2025_jul)
 
+            # Removing all the elements from the power system to prepare for next run
             p_sys.remove_sgen()
             p_sys.remove_gen()
             p_sys.remove_load()
@@ -658,7 +670,9 @@ class MyProblem(ElementwiseProblem):
                                + max(0, h2_energy_loss_2025_jan_mwh) + max(0, h2_energy_loss_2025_jul_mwh) +
                                max(0, res_line_loss_mw_2025_jan_mwh) + max(0, res_line_loss_mw_2025_jul_mwh))
             # print('Penalty_2025 =', penalty)
+            # End of Stage 1: Year 2025
 
+        # -------------------------- Stage 1: Year 2026 --------------------------
         elif self.year == 2026:
             year = 2
             obj_value_2026_eur_npv = 0
@@ -937,6 +951,7 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2026_jan_mwh) + max(0, res_line_loss_mw_2026_jul_mwh))
             # print('penalty_2026 =', penalty)
 
+        # -------------------------- Stage 1: Year 2027 --------------------------
         elif self.year == 2027:
             year = 3
             obj_value_2027_eur_npv = 0
@@ -1205,6 +1220,7 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2027_jan_mwh) + max(0, res_line_loss_mw_2027_jul_mwh))
             # print('penalty_2027 =', penalty)
 
+        # -------------------------- Stage 2: Year 2028 --------------------------
         elif self.year == 2028:
 
             year = 4
@@ -1478,6 +1494,7 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2028_jan_mwh) + max(0, res_line_loss_mw_2028_jul_mwh))
             # print('penalty_2028 =', penalty)
 
+        # -------------------------- Stage 2: Year 2029 --------------------------
         elif self.year == 2029:
             year = 5
 
@@ -1730,6 +1747,7 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2029_jan_mwh) + max(0, res_line_loss_mw_2029_jul_mwh))
             # print('penalty_2029 =', penalty)
 
+        # -------------------------- Stage 2: Year 2030 --------------------------
         elif self.year == 2030:
             year = 6
             obj_value_2030_eur_npv = 0
@@ -1993,8 +2011,8 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2030_jan_mwh) + max(0, res_line_loss_mw_2030_jul_mwh))
             # print('penalty_2028 =', penalty)
 
-        # =================================================== 2031 =================================================
-        if self.year == 2031:
+        # -------------------------- Stage 3: Year 2031 --------------------------
+        elif self.year == 2031:
             year = 7
 
             # ---->>>>>>>>>>>>>> Change: obj_value_YEAR_eur_npv <<<<<<<<<<<<<<<---
@@ -2247,7 +2265,7 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2031_jan_mwh) + max(0, res_line_loss_mw_2031_jul_mwh))
             # print('penalty_2031 =', penalty)
 
-        # =================================================== 2032 =================================================
+        # -------------------------- Stage 3: Year 2032 --------------------------
         elif self.year == 2032:
 
             year = 8
@@ -2505,8 +2523,8 @@ class MyProblem(ElementwiseProblem):
                                max(0, res_line_loss_mw_2032_jan_mwh) + max(0, res_line_loss_mw_2032_jul_mwh))
             # print('penalty_2032 =', penalty)
 
-        # =================================================== 2033 =================================================
-        if self.year == 2033:
+        # -------------------------- Stage 3: Year 2033 --------------------------
+        elif self.year == 2033:
             year = 9
             # ---->>>>>>>>>>>>>> Change: obj_value_YEAR_eur_npv <<<<<<<<<<<<<<<---
             obj_value_2033_eur_npv = 0
